@@ -14,12 +14,17 @@ export async function handleWebhooks(req, res) {
         if (event_type) { where.push(`uw.event_type = $${idx++}`);  values.push(event_type); }
         if (status)     { where.push(`uw.status = $${idx++}`);      values.push(status); }
         if (source)     { where.push(`uw.source = $${idx++}`);      values.push(source); }
+        // Sem "since" explícito, restringe aos últimos 30 dias — a listagem não
+        // é mais limitada por quantidade de linhas, e sim por janela de tempo,
+        // pra não crescer indefinidamente conforme o volume de eventos aumenta.
         if (since)      { where.push(`uw.received_at > $${idx++}`); values.push(since); }
+        else            { where.push(`uw.received_at > NOW() - INTERVAL 30 DAY`); }
         if (after_id)   { where.push(`uw.id > $${idx++}`);          values.push(after_id); }
         const whereStr = where.length ? `WHERE ${where.join(" AND ")}` : "";
-        let maxRows = 500;
-        if (limit) { const p = parseInt(limit, 10); if (!isNaN(p) && p > 0) maxRows = Math.min(p, 500); }
-        const r = await pool.query(`SELECT uw.id, uw.user_id, u.name AS user_name, u.email AS user_email, uw.event_type, uw.payload, uw.status, uw.error_message, uw.source, uw.received_at FROM user_webhooks uw JOIN users u ON u.id = uw.user_id ${whereStr} ORDER BY uw.received_at DESC LIMIT $${idx}`, [...values, maxRows]);
+        let sql = `SELECT uw.id, uw.user_id, u.name AS user_name, u.email AS user_email, uw.event_type, uw.payload, uw.status, uw.error_message, uw.source, uw.received_at FROM user_webhooks uw JOIN users u ON u.id = uw.user_id ${whereStr} ORDER BY uw.received_at DESC`;
+        const queryValues = [...values];
+        if (limit) { const p = parseInt(limit, 10); if (!isNaN(p) && p > 0) { sql += ` LIMIT $${idx}`; queryValues.push(p); } }
+        const r = await pool.query(sql, queryValues);
         if (id) { if (!r.rows[0]) return res.status(404).json({ success: false, message: "Evento não encontrado" }); return res.status(200).json({ success: true, webhook: r.rows[0] }); }
         return res.status(200).json({ success: true, webhooks: r.rows, total: r.rowCount, server_time: new Date().toISOString() });
       }

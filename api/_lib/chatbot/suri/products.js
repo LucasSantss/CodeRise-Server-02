@@ -58,14 +58,32 @@ function toSuriFormat(product, storeId) {
 
   const basePrices = resolveSuriPrices(product.price, product.promotionalPrice ?? 0);
 
+  // A Suri exige que todas as variações (`dimensions[]`) do mesmo produto
+  // compartilhem exatamente o mesmo conjunto de atributos (ex: todas com
+  // "Tamanho" e "Cor") — senão rejeita o produto inteiro com
+  // "ProductAttributesAndDimensionsMustMatch". Produtos ainda em edição na
+  // Olist/e-commerce podem chegar com atributos preenchidos só em parte das
+  // variantes (ex: tamanhos configurados um a um); calculamos aqui a união
+  // dos nomes de atributo entre todas as variantes pra preencher "-" nas que
+  // ainda não têm valor, em vez de travar a sincronização do produto todo.
+  const allAttributeNames = Array.from(new Set(
+    (product.variants || []).flatMap(v => (v.attributes || []).filter(a => hasValue(a.value)).map(a => String(a.name)))
+  ));
+
   const dimensions = (product.variants && product.variants.length > 0)
     ? product.variants.map(v => {
       const variantPrices = resolveSuriPrices(v.price ?? product.price, v.promotionalPrice ?? product.promotionalPrice ?? 0);
       const validAttributes = (v.attributes || []).filter(a => hasValue(a.value));
+      const finalAttributes = [
+        ...validAttributes.map(a => ({ name: String(a.name), value: String(a.value) })),
+        ...allAttributeNames
+          .filter(name => !validAttributes.some(a => String(a.name) === name))
+          .map(name => ({ name, value: "-" })),
+      ];
       const variantObj = {
         sku: buildSku(v.sku || product.sku, product.id),
         dimensions: Object.fromEntries(
-          validAttributes.map(a => [String(a.name), String(a.value)])
+          finalAttributes.map(a => [a.name, a.value])
         ),
         price: variantPrices.price,
         promotionalPrice: variantPrices.promotionalPrice,
@@ -79,10 +97,7 @@ function toSuriFormat(product, storeId) {
           unitsPerPackage: 1,
         },
         // Atributos da variação (ex: [{ name: "Cor", value: "Azul" }, { name: "Tamanho", value: "M" }])
-        attributes: validAttributes.map(a => ({
-          name: String(a.name || ""),
-          value: String(a.value || ""),
-        })),
+        attributes: finalAttributes,
         image: buildImage(v.imageUrl),
       };
       return variantObj;
@@ -156,12 +171,14 @@ function toSuriFormat(product, storeId) {
     attributes: (() => {
       // Agrega atributos das variações no formato que a Suri espera:
       // [{ name: "Cor", options: [{ name: "Azul" }, { name: "Vermelho" }] }]
+      // Lê de `dimensions` (já com os placeholders "-" preenchidos acima), não
+      // das variantes originais, pra manter as opções aqui coerentes com os
+      // valores que cada variação de fato carrega em `dimensions[].dimensions`.
       const attrMap = new Map();
-      for (const v of (product.variants || [])) {
-        for (const a of (v.attributes || [])) {
-          if (!hasValue(a.value)) continue;
+      for (const d of dimensions) {
+        for (const a of (d.attributes || [])) {
           if (!attrMap.has(a.name)) attrMap.set(a.name, new Set());
-          attrMap.get(a.name).add(String(a.value));
+          attrMap.get(a.name).add(a.value);
         }
       }
       return Array.from(attrMap.entries()).map(([name, values]) => ({
@@ -247,64 +264,6 @@ export async function syncProduct(endpoint, token, product, resolvedStoreId = nu
     // Anexa o payload enviado ao erro — quem chama (ex: logChatbotProductSync)
     // usa isso pra registrar exatamente o que foi mandado à Suri, mesmo em falha.
     err.suriPayload = suriPayload;
-    throw err;
-  }
-}
-
-/**
- * Atualiza só o preço de um ou mais SKUs de um produto que já existe na Suri,
- * via PUT /api/shop/products/{id}/prices — bem mais leve que reenviar o
- * produto inteiro (PUT /api/shop/products). Usado pelo webhook prices-changed
- * da Olist, que já traz sku+price prontos, sem precisar buscar o produto completo.
- * https://documenter.getpostman.com/view/17684221/UUxz9mt5#6df344c4-6193-430a-8b66-bb6614d055d8
- *
- * @param {Array<{sku: string, price: number, promotionalPrice?: number}>} items
- */
-export async function updateProductPricesOnly(endpoint, token, productId, items, resolvedStoreId = null) {
-  const storeId = resolvedStoreId || await getFirstStoreId(endpoint, token);
-  if (!storeId) throw new Error("Nenhuma loja encontrada na Suri — configure uma loja antes de sincronizar produtos.");
-
-  const skus = items.map(item => {
-    const prices = resolveSuriPrices(item.price, item.promotionalPrice ?? 0);
-    return {
-      sku: String(item.sku),
-      price: prices.price,
-      priceTables: buildPriceTables(storeId, prices.price),
-    };
-  });
-  const body = { listPrice: skus[0]?.price ?? 0, skus };
-
-  try {
-    await client.updateProductPrices(endpoint, token, productId, body);
-    return { action: "prices_updated", productId, storeId, sentPayload: body };
-  } catch (err) {
-    err.suriPayload = body;
-    throw err;
-  }
-}
-
-/**
- * Atualiza só o estoque de um ou mais SKUs de um produto que já existe na
- * Suri, via PUT /api/shop/products/{id}/stocks — mesmo racional do
- * updateProductPricesOnly, para o webhook stocks-changed da Olist.
- *
- * @param {Array<{sku: string, stock: number}>} items
- */
-export async function updateProductStocksOnly(endpoint, token, productId, items, resolvedStoreId = null) {
-  const storeId = resolvedStoreId || await getFirstStoreId(endpoint, token);
-  if (!storeId) throw new Error("Nenhuma loja encontrada na Suri — configure uma loja antes de sincronizar produtos.");
-
-  const skus = items.map(item => ({
-    sku: String(item.sku),
-    stocks: buildStocks(storeId, item.stock ?? 0),
-  }));
-  const body = { skus };
-
-  try {
-    await client.updateProductStocks(endpoint, token, productId, body);
-    return { action: "stocks_updated", productId, storeId, sentPayload: body };
-  } catch (err) {
-    err.suriPayload = body;
     throw err;
   }
 }

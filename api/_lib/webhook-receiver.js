@@ -217,7 +217,6 @@ export async function processOrderCreated(ep, tk, n) {
   return { action: "budget_created", suriOrderId };
 }
 export async function processOrderShipped(ep,tk,n) { const ex=await findSuriOrder(ep,tk,n.orderId); if (!ex) throw new Error(`Pedido ${n.orderId} não encontrado na Suri`); const st=mapLogisticStatus(n.logisticStatus); await suriRequest(ep,tk,"POST","/api/shop/orders/logistic",{id:ex.id||ex.orderId,status:st}); return {action:"logistic_updated",suriOrderId:ex.id,status:st}; }
-export async function processOrderCancelled(ep,tk,n) { const ex=await findSuriOrder(ep,tk,n.orderId); if (!ex) throw new Error(`Pedido ${n.orderId} não encontrado na Suri`); await suriRequest(ep,tk,"POST","/api/shop/orders/cancel",{orderId:ex.id||ex.orderId}); return {action:"cancelled",suriOrderId:ex.id}; }
 // Registra o resultado do envio à Suri como uma linha própria em user_webhooks
 // (origem "chatbot"), separada da linha de recebimento do webhook do e-commerce
 // (origem "ecommerce") — assim dá pra ver, na tela de Logs, se a sincronização
@@ -225,9 +224,8 @@ export async function processOrderCancelled(ep,tk,n) { const ex=await findSuriOr
 async function logChatbotProductSync(userId, product, outcome, eventType = "product.sync") {
   if (!userId) return;
   // sentPayload vem em outcome.result (sucesso) ou outcome.sentPayload (erro,
-  // anexado ao erro dentro de syncProduct/updateProductPricesOnly/StocksOnly)
-  // — nos dois casos, mostra exatamente o corpo que foi enviado à Suri, não
-  // só o resultado/erro da chamada.
+  // anexado ao erro dentro de syncProduct) — nos dois casos, mostra exatamente
+  // o corpo que foi enviado à Suri, não só o resultado/erro da chamada.
   const payload = {
     productId: product?.id,
     sku: product?.sku,
@@ -243,7 +241,7 @@ async function logChatbotProductSync(userId, product, outcome, eventType = "prod
   } catch { /* log é best-effort — não pode quebrar a sincronização */ }
 }
 
-export async function processProductSync(ep, tk, n, platform, userId) {
+export async function processProductSync(ep, tk, n, platform, userId, eventType = "product.sync") {
   const { syncProduct } = await import("./chatbot/suri/products.js");
   const { listCategories, syncCategory } = await import("./chatbot/suri/categories.js");
   const rawProduct = n.product || null;
@@ -296,39 +294,39 @@ export async function processProductSync(ep, tk, n, platform, userId) {
 
   try {
     const result = await syncProduct(ep, tk, product, null, categoryIdMap.size > 0 ? categoryIdMap : null);
-    await logChatbotProductSync(userId, product, { status: "processed", result });
+    await logChatbotProductSync(userId, product, { status: "processed", result }, eventType);
     return result;
   } catch (err) {
-    await logChatbotProductSync(userId, product, { status: "error", errorMessage: err.message, sentPayload: err.suriPayload });
+    await logChatbotProductSync(userId, product, { status: "error", errorMessage: err.message, sentPayload: err.suriPayload }, eventType);
     throw err;
   }
 }
 
 /**
  * Cenário stocks-changed / prices-changed (Olist → Suri).
- * Esses webhooks já trazem { sku, reference, quantity? / price? } prontos por
- * item — não precisamos do produto completo pra saber o novo valor, só do
- * productId na Suri (resolvido pela reference) pra chamar o endpoint dedicado
- * de preço/estoque (PUT /products/{id}/prices ou /stocks). Isso evita buscar
- * o produto inteiro na Olist e reenviar o payload completo à Suri só pra
- * ajustar um número — que era o gargalo apontado (demora perceptível).
- * Fallback: se o produto ainda não existir na Suri (404 no endpoint dedicado),
- * cai pro fluxo completo (busca full + processProductSync) pra criá-lo.
+ * Esses webhooks só trazem { sku, reference, quantity? / price? } por item —
+ * não o produto completo. Os endpoints dedicados de preço/estoque da Suri
+ * (PUT /products/{id}/prices e /stocks) exigem que o produto já exista lá;
+ * como a Olist não tem webhook de criação de produto, um produto novo só
+ * chega à Suri por esse caminho, e o PUT parcial nunca manda category/brand/
+ * images/etc — isso gerava produtos incompletos e rejeições (ex: "Product
+ * must have a category"). Por isso sempre buscamos o produto completo na
+ * Olist e reenviamos via processProductSync (POST se não existir, PUT do
+ * produto inteiro se já existir), igual ao fluxo de product_changed.
  */
 export async function processOlistStockOrPriceChanged(suriEndpoint, suriToken, normalized, userId) {
   const intRow = await pool.query("SELECT ecommerce_config FROM user_integrations WHERE user_id = $1", [userId]);
   const { store_url, access_token } = intRow.rows[0]?.ecommerce_config || {};
   if (!store_url || !access_token) return { action: "skipped", reason: "Credenciais da Olist não configuradas" };
 
-  const olistClient = await import("./ecommerce/olist/client.js");
-  const { findProductByReference } = await import("./ecommerce/olist/products.js");
-  const { updateProductPricesOnly, updateProductStocksOnly } = await import("./chatbot/suri/products.js");
+  const { findProductByReference, fetchFullProductRaw } = await import("./ecommerce/olist/products.js");
 
   const isPriceChange = normalized.eventType === "product.price_changed";
   const logEventType = isPriceChange ? "product.price_updated" : "product.stock_updated";
 
-  // Agrupa por reference (produto pai) pra resolver o productId da Suri uma
-  // única vez por produto e atualizar todos os SKUs afetados numa só chamada.
+  // Agrupa por reference (produto pai) pra resolver o produto na Olist uma
+  // única vez e reenviar o produto inteiro uma única vez, mesmo que várias
+  // variantes (SKUs) tenham mudado.
   const byReference = new Map();
   for (const item of (normalized.items || [])) {
     if (!item.sku || !item.reference) continue;
@@ -342,26 +340,10 @@ export async function processOlistStockOrPriceChanged(suriEndpoint, suriToken, n
     try {
       const found = await findProductByReference(store_url, access_token, reference, refItems[0]?.sku);
       if (!found) { results.push({ reference, status: "not_found_in_olist" }); continue; }
-      const productId = String(found.id);
 
-      let syncResult;
-      try {
-        syncResult = isPriceChange
-          ? await updateProductPricesOnly(suriEndpoint, suriToken, productId, refItems.map(i => ({ sku: i.sku, price: parseFloat(i.price || 0) })))
-          : await updateProductStocksOnly(suriEndpoint, suriToken, productId, refItems.map(i => ({ sku: i.sku, stock: parseFloat(i.quantity ?? i.stock ?? 0) })));
-        await logChatbotProductSync(userId, { id: productId, sku: refItems[0]?.sku, name: reference }, { status: "processed", result: syncResult }, logEventType);
-      } catch (err) {
-        // Produto existe na Olist mas ainda não foi criado na Suri — o endpoint
-        // dedicado responde 404 porque só atualiza produto já existente.
-        // Cai pro fluxo completo, que cria o produto do zero se preciso.
-        if ((err.message || "").includes("HTTP 404")) {
-          const full = await olistClient.getProduct(store_url, access_token, found.id);
-          syncResult = await processProductSync(suriEndpoint, suriToken, { product: full || found }, "olist", userId);
-        } else {
-          await logChatbotProductSync(userId, { id: productId, sku: refItems[0]?.sku, name: reference }, { status: "error", errorMessage: err.message, sentPayload: err.suriPayload }, logEventType);
-          throw err;
-        }
-      }
+      const full = await fetchFullProductRaw({ store_url, access_token }, found.id);
+      // processProductSync já registra o log (sucesso ou erro) via logChatbotProductSync internamente.
+      const syncResult = await processProductSync(suriEndpoint, suriToken, { product: full || found }, "olist", userId, logEventType);
       results.push({ reference, status: "synced", ...syncResult });
     } catch (err) {
       results.push({ reference, status: "error", detail: err.message });
@@ -644,8 +626,8 @@ export async function handleWebhook(req, res) {
         const intRow = await pool.query("SELECT ecommerce_config FROM user_integrations WHERE user_id = $1", [user_id]);
         const { store_url, access_token } = intRow.rows[0]?.ecommerce_config || {};
         if (store_url && access_token) {
-          const { getProduct } = await import("./ecommerce/olist/client.js");
-          const full = await getProduct(store_url, access_token, rawPayload.id);
+          const { fetchFullProductRaw } = await import("./ecommerce/olist/products.js");
+          const full = await fetchFullProductRaw({ store_url, access_token }, rawPayload.id);
           if (full) rawPayload = { ...rawPayload, ...full };
         }
       } catch {}
@@ -731,7 +713,11 @@ export async function handleWebhook(req, res) {
     switch (eventType) {
       case "order.created":        result = await processOrderCreated(suri_endpoint, suri_token, normalized);  break;
       case "order.shipped":        result = await processOrderShipped(suri_endpoint, suri_token, normalized);  break;
-      case "order.cancelled":      result = await processOrderCancelled(suri_endpoint, suri_token, normalized); break;
+      // Cancelamento vindo do e-commerce não propaga pra Suri — só a Suri
+      // (order.cancelled.suri/order.cancelled.olist) é fonte da verdade pra
+      // cancelar pedido; senão um cancelamento parcial/local no e-commerce
+      // cancelaria o pedido inteiro na Suri sem ela ter decidido isso.
+      case "order.cancelled":      { await pool.query("UPDATE user_webhooks SET status='processed', error_message=$1 WHERE id=$2", [`Ignorado: ${logEventType} (cancelamento só é aplicado quando vem da Suri)`, webhookId]); return res.status(200).json({ success:true, message:"Evento registrado sem ação.", event_type:logEventType, webhook_id:webhookId }); }
       case "product.sync":         result = await processProductSync(suri_endpoint, suri_token, normalized, ecommerce_platform, user_id); break;
       case "order.noop":           { await pool.query("UPDATE user_webhooks SET status='processed', error_message=$1 WHERE id=$2", [`Ignorado: ${logEventType} (sem ação configurada)`, webhookId]); return res.status(200).json({ success:true, message:"Evento registrado sem ação.", event_type:logEventType, webhook_id:webhookId }); }
       case "order.paid":           result = await processSuriOrderCreatedGeneric(suri_endpoint, suri_token, normalized, user_id); break;

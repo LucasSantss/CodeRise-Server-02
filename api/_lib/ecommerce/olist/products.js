@@ -144,23 +144,37 @@ function buildDescriptionHtml(rawText) {
 }
 
 /**
- * Busca o produto completo na API da Olist e normaliza.
- * Garante dados sempre atualizados, independente do que veio no webhook.
+ * Busca o produto completo na API da Olist com variantes sempre atualizadas
+ * (formato bruto da Olist, não normalizado).
+ *
+ * GET /products/{id} devolve as variantes num sub-objeto que às vezes fica
+ * defasado (preço/estoque zerados) em relação ao estado real — observado em
+ * produtos recém-criados/em edição, onde o webhook de estoque ou preço chega
+ * antes do detalhe do produto refletir o valor atual. GET /products/{id}/variants
+ * é a fonte correta pra isso, então sempre sobrescrevemos p.variants com o
+ * retorno desse endpoint quando disponível.
  */
-export async function fetchAndNormalizeProduct(config, productId) {
+export async function fetchFullProductRaw(config, productId) {
   const { store_url, access_token } = config;
 
-  // Busca produto e variantes em paralelo para dados atualizados
   const [p, variantsFromApi] = await Promise.all([
     client.getProduct(store_url, access_token, productId),
     client.getProductVariants(store_url, access_token, productId).catch(() => null),
   ]);
 
-  // Injeta variantes atualizadas antes de normalizar
   if (Array.isArray(variantsFromApi) && variantsFromApi.length > 0) {
     p.variants = variantsFromApi;
   }
 
+  return p;
+}
+
+/**
+ * Busca o produto completo na API da Olist e normaliza.
+ * Garante dados sempre atualizados, independente do que veio no webhook.
+ */
+export async function fetchAndNormalizeProduct(config, productId) {
+  const p = await fetchFullProductRaw(config, productId);
   return normalizeProduct(p);
 }
 
@@ -241,7 +255,12 @@ export function normalizeProduct(p) {
     description: buildDescriptionHtml(p.plain_description || p.description || ""),
     categoryId,
     brand: p.brand || null,
-    isActive: p.available === true || p.available === "true",
+    // "available" é o nome do campo na API REST (GET /products/{id}, usada na
+    // sincronização completa); o payload de webhook (product-changed) traz o
+    // mesmo dado como "active" — sem checar os dois, o atalho do webhook
+    // (normalizeWebhookProduct, que processa o payload direto sem refetch)
+    // sempre lia undefined e marcava o produto como inativo por engano.
+    isActive: p.available === true || p.available === "true" || p.active === true || p.active === "true",
     price: firstVariant.price || parseFloat(p.price || 0),
     promotionalPrice: firstVariant.promotionalPrice || parseFloat(p.promotional_price || 0),
     url: p.url || null,
@@ -283,6 +302,22 @@ export function normalizeWebhookProduct(payload) {
  */
 export async function findProductByReference(storeUrl, accessToken, reference, sku) {
   if (!reference && !sku) return null;
+
+  // Estratégia primária: GET /variants/{sku} — busca direta e exata pela
+  // variante (mesmo endpoint usado por stock.js/orders.js), muito mais
+  // confiável do que filtrar /products, já que a Olist nem sempre respeita
+  // os parâmetros de filtro (reference/sku) nesse endpoint — quando ignora,
+  // devolve a primeira página do catálogo inteiro e o produto certo nunca
+  // bate no .find() abaixo, gerando falso "not_found_in_olist".
+  if (sku) {
+    try {
+      const variant = await client.getVariantBySku(storeUrl, accessToken, sku);
+      const productId = variant?.product_id ?? variant?.product?.id ?? variant?.productId ?? null;
+      if (productId) return { id: String(productId), reference: variant?.product?.reference ?? reference ?? null, sku: variant?.sku ?? sku };
+    } catch {}
+  }
+
+  // Fallback: filtro em /products por reference/sku.
   const params = { per_page: 5 };
   if (reference) params.reference = reference;
   if (sku) params.sku = sku;
