@@ -109,6 +109,17 @@ async function registerOlist(config, webhookUrl) {
   };
 }
 
+async function registerMaxdata(config, webhookUrl) {
+  const { api_url, emp_id, terminal } = config;
+  if (!api_url || !emp_id || !terminal)
+    throw new Error("api_url, emp_id e terminal são obrigatórios");
+
+  // A MaxData não tem nenhuma API (nem painel) de webhooks — delega a
+  // mensagem explicativa pro módulo da integração.
+  const { registerWebhooks } = await import("./ecommerce/maxdata/index.js");
+  return registerWebhooks(config, webhookUrl);
+}
+
 async function listNuvemshopWebhooks(config) {
   const { store_id, access_token } = config;
   if (!store_id||!access_token) throw new Error("store_id e access_token são obrigatórios");
@@ -213,6 +224,7 @@ export async function handleRegisterWebhook(req, res) {
       case "vtex":        result = await registerVtex(ecommerce_config, webhookUrl);        break;
       case "tray":        result = await registerTray(ecommerce_config, webhookUrl);        break;
       case "olist":        result = await registerOlist(ecommerce_config, webhookUrl);        break;
+      case "maxdata":      result = await registerMaxdata(ecommerce_config, webhookUrl);     break;
       default: return res.status(400).json({ success:false, message:`Registro automático não disponível para '${ecommerce_platform}'. URL: ${webhookUrl}` });
     }
     return res.status(200).json({ success:true, ...result, webhook_url:webhookUrl });

@@ -66,6 +66,7 @@ const AdminIntegrations = () => {
                 <SelectItem value="tray">Tray</SelectItem>
                 <SelectItem value="nuvemshop">Nuvemshop</SelectItem>
                 <SelectItem value="vtex">VTEX</SelectItem>
+                <SelectItem value="maxdata">MaxData</SelectItem>
                 <SelectItem value="custom">Custom</SelectItem>
               </SelectContent>
             </Select>

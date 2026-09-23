@@ -18,14 +18,16 @@ import { useToast } from '@/hooks/use-toast';
 import { useAuthStore } from '@/store/auth';
 import { getIntegrations, updateIntegration, patchIntegration, testEcommerceConnection, type StoreItem } from '@/services/api';
 
-// Plataformas que suportam registro automático de webhook
+// Plataformas que suportam registro automático de webhook.
+// MaxData fica de fora: não tem nenhuma API (nem painel) de webhooks — a
+// sincronização é sempre via "Sincronizar Catálogo" (manual ou agendada).
 const AUTO_REGISTER_SUPPORT: Record<string, boolean> = {
-  shopify: true, woocommerce: true, nuvemshop: true, vtex: true, tray: true, olist: true, custom: false,
+  shopify: true, woocommerce: true, nuvemshop: true, vtex: true, tray: true, olist: true, maxdata: false, custom: false,
 };
 
 // Plataformas que suportam teste de conexão
 const TEST_CONNECTION_SUPPORT: Record<string, boolean> = {
-  shopify: true, woocommerce: true, nuvemshop: true, vtex: true, tray: true, olist: true, custom: false,
+  shopify: true, woocommerce: true, nuvemshop: true, vtex: true, tray: true, olist: true, maxdata: true, custom: false,
 };
 
 // Documentação manual por plataforma

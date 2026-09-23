@@ -174,6 +174,13 @@ function normalizeOlist(payload, queryEvent) {
     },
   };
 }
+// A MaxData não envia webhooks (ver ecommerce/maxdata/index.js) — este
+// normalizer só existe por paridade de interface, nunca deve ser exercitado
+// em produção, já que a MaxData nunca chama nosso endpoint de webhook.
+function normalizeMaxdata(payload) {
+  const p = payload.product || payload;
+  return { eventType: "product.sync", product: p };
+}
 export function normalizePayload(platform, payload, queryEvent) {
   switch (platform) {
     case "vtex":        return normalizeVtex(payload);
@@ -182,6 +189,7 @@ export function normalizePayload(platform, payload, queryEvent) {
     case "nuvemshop":   return normalizeNuvemshop(payload);
     case "tray":        return normalizeTray(payload);
     case "olist":       return normalizeOlist(payload, queryEvent);
+    case "maxdata":     return normalizeMaxdata(payload);
     default: return { eventType:payload.type||payload.event||payload.event_type||"desconhecido", orderId:String(payload.order_id||payload.orderId||payload.id||""), paymentTracking:"", logisticStatus:payload.status||"shipped", totalAmount:parseFloat(payload.total||payload.total_price||0), items:payload.items||payload.line_items||[], shipping:{provider:"Entrega",type:1,price:0,estimative:"5 dias úteis"} };
   }
 }
@@ -415,6 +423,9 @@ export async function processSuriOrderCreatedGeneric(suriEndpoint, suriToken, no
   } else if (platform === "shopify") {
     const { deductStockForOrderItems } = await import("./ecommerce/shopify/stock.js");
     result = { ...(await deductStockForOrderItems(config, items.map(i => ({ sku: String(i.sku || ""), quantity: Math.round(parseFloat(i.quantity || i.paidQuantity || 1)), name: i.name || "", inventoryItemId: i.inventoryItemId || null })))), orderId: suriOrderId };
+  } else if (platform === "maxdata") {
+    const { deductStockForOrderItems } = await import("./ecommerce/maxdata/stock.js");
+    result = { ...(await deductStockForOrderItems(config, items.map(i => ({ sku: String(i.sku || ""), quantity: Math.round(parseFloat(i.quantity || i.paidQuantity || 1)), name: i.name || "" })))), orderId: suriOrderId };
   } else {
     return { action: "skipped", reason: `Plataforma "${platform}" não suporta baixa de estoque automática via Suri` };
   }
@@ -477,6 +488,14 @@ export async function processSuriOrderCancelledGeneric(suriEndpoint, suriToken, 
   } else if (platform === "shopify") {
     for (const item of items) {
       stockResults.push({ sku: item.sku || "", status: "skipped", reason: "Shopify requer inventory_item_id para devolução de estoque" });
+    }
+  } else if (platform === "maxdata") {
+    const { returnVariantStock } = await import("./ecommerce/maxdata/stock.js");
+    for (const item of items) {
+      const sku = String(item.sku || ""); const qty = Math.round(parseFloat(item.quantity || item.paidQuantity || 1));
+      if (!sku || !qty) continue;
+      try { stockResults.push({ ...(await returnVariantStock(config, sku, qty)), name: item.name || "" }); }
+      catch (err) { stockResults.push({ sku, status: "error", error: err.message }); }
     }
   } else {
     return { action: "skipped", reason: `Plataforma "${platform}" sem suporte a devolução de estoque via Suri` };
@@ -603,7 +622,7 @@ export async function handleWebhook(req, res) {
   const { user_id, ecommerce_platform, chatbot_platform } = integration;
   const isViaWebhookToken = integration.webhook_token === token;
   const activePlatform = isViaWebhookToken ? (ecommerce_platform || "ecommerce") : (chatbot_platform || "chatbot");
-  const PLATFORM_LABELS = { shopify:"Shopify", woocommerce:"WooCommerce", nuvemshop:"Nuvemshop", vtex:"VTEX", tray:"Tray", suri:"Suri", evolution_api:"Evolution API", kommo:"Kommo", chatbot:"Chatbot", ecommerce:"E-commerce" };
+  const PLATFORM_LABELS = { shopify:"Shopify", woocommerce:"WooCommerce", nuvemshop:"Nuvemshop", vtex:"VTEX", tray:"Tray", olist:"Olist Ecommerce", maxdata:"MaxData", suri:"Suri", evolution_api:"Evolution API", kommo:"Kommo", chatbot:"Chatbot", ecommerce:"E-commerce" };
   const platformLabel = PLATFORM_LABELS[activePlatform] || activePlatform;
   let userName = `ID ${user_id}`;
   try { const uRow = await pool.query("SELECT name FROM users WHERE id = $1", [user_id]); if (uRow.rows[0]) userName = uRow.rows[0].name; } catch {}

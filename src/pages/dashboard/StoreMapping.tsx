@@ -7,13 +7,13 @@ import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Switch } from '@/components/ui/switch';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Loader2, ArrowRight, Store, Save, Trash2, AlertTriangle, CheckCircle2, RefreshCw, Info, PackageSearch, XCircle, ChevronDown, ChevronUp, RotateCcw, Clock } from 'lucide-react';
+import { Loader2, ArrowRight, Store, Save, Trash2, AlertTriangle, CheckCircle2, RefreshCw, Info, PackageSearch, XCircle, ChevronDown, ChevronUp, RotateCcw, Clock, Radar } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import { getIntegrations, getChatbot, testEcommerceConnection, testSuriConnection, updateIntegration, updateChatbot, type StoreItem } from '@/services/api';
-import { CHATBOT_FIELDS, type ChatbotPlatform } from '@/types';
+import { CHATBOT_FIELDS, POLLING_ONLY_PLATFORMS, type ChatbotPlatform } from '@/types';
 import { useGsapStagger } from '@/hooks/use-gsap';
 import { parseApiError } from '@/lib/parseApiError';
-import type { SyncSchedule, SyncScheduleHistoryEntry, SyncResultItem } from '@/types';
+import type { SyncSchedule, SyncScheduleHistoryEntry, SyncResultItem, CatalogPolling } from '@/types';
 import { SyncResultRow } from '@/components/sync-result-row';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -120,6 +120,9 @@ const StoreMapping = () => {
   const [savingSchedule, setSavingSchedule] = useState(false);
   const [showScheduleHistory, setShowScheduleHistory] = useState(false);
 
+  const [catalogPolling, setCatalogPolling] = useState<CatalogPolling>({ enabled: false, intervalMinutes: 10 });
+  const [savingPolling, setSavingPolling] = useState(false);
+
   const syncPanelRef = useRef<HTMLDivElement>(null);
   const { toast } = useToast();
   const containerRef = useGsapStagger<HTMLDivElement>([loading], { stagger: 0.1, y: 20, delay: 0.05 });
@@ -146,6 +149,7 @@ const StoreMapping = () => {
           }
           if (cfg._ecommerce_stores) { try { setEcommerceStores(JSON.parse(cfg._ecommerce_stores)); setEcommerceStatus('ok'); } catch { /* ignore */ } }
           if (i.sync_schedule) setSyncSchedule({ enabled: false, times: [], timezone: 'America/Sao_Paulo', ...i.sync_schedule });
+          if (i.catalog_polling) setCatalogPolling({ enabled: false, intervalMinutes: 10, ...i.catalog_polling });
         }
         if (c) {
           const ccfg = c.chatbot_config || {};
@@ -369,6 +373,27 @@ const StoreMapping = () => {
       toast({ title: 'Erro ao salvar agendamento', description: err instanceof Error ? err.message : '', variant: 'destructive' });
     } finally {
       setSavingSchedule(false);
+    }
+  };
+
+  // ── Sincronização Incremental (Polling) ──────────────────────────────────
+  // Só existe pra plataformas sem webhook (POLLING_ONLY_PLATFORMS) — a
+  // execução em si roda no servidor (cron interno do Hostinger a cada 5min,
+  // ou /cron-sync-stores externo), este handler só salva a preferência.
+  const handleSavePolling = async () => {
+    setSavingPolling(true);
+    try {
+      await updateIntegration({ catalog_polling: { enabled: catalogPolling.enabled, intervalMinutes: catalogPolling.intervalMinutes } });
+      toast({
+        title: '✅ Configuração salva!',
+        description: catalogPolling.enabled
+          ? `Sincronização incremental ativa a cada ${catalogPolling.intervalMinutes} minutos.`
+          : 'Sincronização incremental desativada.',
+      });
+    } catch (err: unknown) {
+      toast({ title: 'Erro ao salvar', description: err instanceof Error ? err.message : '', variant: 'destructive' });
+    } finally {
+      setSavingPolling(false);
     }
   };
 
@@ -720,6 +745,62 @@ const StoreMapping = () => {
               {savingSchedule ? <><Loader2 className="h-3.5 w-3.5 animate-spin" />Salvando...</> : <><Save className="h-3.5 w-3.5" />Salvar agendamento</>}
             </Button>
           </div>
+
+          {/* ── Sincronização Incremental (Polling) — só pra plataformas sem webhook ── */}
+          {POLLING_ONLY_PLATFORMS.includes(ecommercePlatform as typeof POLLING_ONLY_PLATFORMS[number]) && (
+            <div className="rounded-lg border p-4 space-y-4">
+              <div className="flex items-center justify-between gap-3 flex-wrap">
+                <div className="flex items-center gap-2">
+                  <Radar className="h-4 w-4 text-muted-foreground" />
+                  <div>
+                    <p className="text-sm font-medium">Sincronização Incremental</p>
+                    <p className="text-xs text-muted-foreground">
+                      Esta plataforma não envia webhooks. Verificamos periodicamente o que mudou no catálogo
+                      (só o que mudou é reenviado — sem recarregar tudo a cada vez).
+                    </p>
+                  </div>
+                </div>
+                <Switch
+                  checked={catalogPolling.enabled}
+                  onCheckedChange={(checked) => setCatalogPolling(prev => ({ ...prev, enabled: checked }))}
+                  disabled={!hasCredentials}
+                />
+              </div>
+
+              {catalogPolling.enabled && (
+                <div className="flex items-center gap-2">
+                  <Label className="text-xs text-muted-foreground shrink-0">Intervalo</Label>
+                  <Select
+                    value={String(catalogPolling.intervalMinutes)}
+                    onValueChange={(v) => setCatalogPolling(prev => ({ ...prev, intervalMinutes: Number(v) as CatalogPolling['intervalMinutes'] }))}
+                  >
+                    <SelectTrigger className="h-8 w-40 text-sm"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="10">A cada 10 minutos</SelectItem>
+                      <SelectItem value="15">A cada 15 minutos</SelectItem>
+                      <SelectItem value="30">A cada 30 minutos</SelectItem>
+                      <SelectItem value="60">A cada 60 minutos</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
+
+              {catalogPolling.lastResult && (
+                <div className="flex items-start gap-2 text-xs text-muted-foreground">
+                  {catalogPolling.lastResult.success
+                    ? <CheckCircle2 className="h-3.5 w-3.5 text-green-500 shrink-0 mt-0.5" />
+                    : <XCircle className="h-3.5 w-3.5 text-destructive shrink-0 mt-0.5" />}
+                  <span>
+                    Última verificação: {new Date(catalogPolling.lastResult.at).toLocaleString('pt-BR')} — {catalogPolling.lastResult.message}
+                  </span>
+                </div>
+              )}
+
+              <Button size="sm" onClick={handleSavePolling} disabled={savingPolling || !hasCredentials} className="gap-2">
+                {savingPolling ? <><Loader2 className="h-3.5 w-3.5 animate-spin" />Salvando...</> : <><Save className="h-3.5 w-3.5" />Salvar</>}
+              </Button>
+            </div>
+          )}
 
           {syncing && <SyncProgress />}
 

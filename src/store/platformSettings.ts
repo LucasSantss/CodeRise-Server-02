@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 
 export const CHATBOT_PLATFORMS = ['suri', 'evolution_api', 'kommo', 'take_blip', 'manychat', 'weni'] as const;
-export const ECOMMERCE_PLATFORMS = ['shopify', 'woocommerce', 'tray', 'nuvemshop', 'olist', 'vtex', 'custom'] as const;
+export const ECOMMERCE_PLATFORMS = ['shopify', 'woocommerce', 'tray', 'nuvemshop', 'olist', 'vtex', 'maxdata', 'custom'] as const;
 
 export type PlatformKey = typeof CHATBOT_PLATFORMS[number] | typeof ECOMMERCE_PLATFORMS[number];
 

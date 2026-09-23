@@ -2,7 +2,7 @@ import pool from "./db.js";
 import { requireAuth } from "../_auth.js";
 import { notifyAdminIntegrationError } from "./error-webhook.js";
 
-const SUPPORTED_PLATFORMS = ["nuvemshop", "olist", "shopify", "woocommerce", "tray", "vtex"];
+const SUPPORTED_PLATFORMS = ["nuvemshop", "olist", "shopify", "woocommerce", "tray", "vtex", "maxdata"];
 
 async function notifySyncFailure(row, platform, message, extra = {}) {
   let userName = row.user_id ? `ID ${row.user_id}` : "desconhecido";
@@ -147,6 +147,28 @@ async function resolvePlatformAdapters(platform, ecommerceConfig) {
         normalizeProduct,
         fetchCategories: () => fetchCategories({ account_name, app_key, app_token }),
         storeKeyValid: !!account_name && !!app_key && !!app_token,
+      };
+    }
+    case "maxdata": {
+      const client = await import("./ecommerce/maxdata/client.js");
+      const { normalizeProduct } = await import("./ecommerce/maxdata/products.js");
+      const { fetchCategories } = await import("./ecommerce/maxdata/categories.js");
+      const { api_url, emp_id, terminal, tabela_preco_id } = ecommerceConfig;
+      return {
+        // ecommerce=true traz só produtos marcados pro e-commerce;
+        // sincronizacao=true traz os dados completos (imagens, lotes, código
+        // de barras, estoque multiloja) — ver resumo da API no cadastro da integração.
+        listProductsFn: (params) => client.listProducts(api_url, emp_id, terminal, {
+          page: params.page,
+          limit: params.limit || params.per_page || 50,
+          ecommerce: true,
+          sincronizacao: true,
+          ...(tabela_preco_id ? { tabelaPrecoId: tabela_preco_id } : {}),
+        }).then(r => Array.isArray(r) ? r : (r.docs || [])),
+        getVariantsFn: null, // MaxData não tem variantes (cor/tamanho)
+        normalizeProduct,
+        fetchCategories: () => fetchCategories({ api_url, emp_id, terminal }),
+        storeKeyValid: !!api_url && !!emp_id && !!terminal,
       };
     }
     default:

@@ -9,7 +9,7 @@ import { notifyAdminIntegrationError } from "./error-webhook.js";
 
 const PLATFORM_LABELS = {
   shopify: "Shopify", woocommerce: "WooCommerce", nuvemshop: "Nuvemshop",
-  vtex: "VTEX", tray: "Tray", olist: "Olist Ecommerce", custom: "Custom",
+  vtex: "VTEX", tray: "Tray", olist: "Olist Ecommerce", maxdata: "MaxData", custom: "Custom",
 };
 
 async function testNuvemshop({ store_id, access_token }) {
@@ -100,6 +100,20 @@ async function testOlist({ store_url, access_token }) {
   return { store: store_url, plan: "Olist Ecommerce", country: "BR" };
 }
 
+async function testMaxdata({ api_url, emp_id, terminal }) {
+  if (!api_url || !emp_id || !terminal) throw new Error("api_url, emp_id e terminal são obrigatórios.");
+  const { testConnection } = await import("./ecommerce/maxdata/client.js");
+  try {
+    await testConnection(api_url, emp_id, terminal);
+  } catch (err) {
+    const msg = err.message || "";
+    if (msg.includes("HTTP 401") || msg.includes("HTTP 403")) throw new Error(`Credenciais inválidas (HTTP ${msg.match(/HTTP (\d+)/)?.[1] || "401"}). Verifique o ID da Empresa e o Terminal.`);
+    if (msg.includes("HTTP 404")) throw new Error(`URL não encontrada (HTTP 404). Verifique a "API URL" configurada: "${api_url}".`);
+    throw new Error(`MaxData: ${msg}`);
+  }
+  return { store: `Empresa #${emp_id}`, plan: "MaxData", country: "BR" };
+}
+
 export default async function handler(req, res) {
   if (setCors(req, res)) return;
   if (req.method !== "POST") { res.setHeader("Allow", ["POST"]); return res.status(405).end(); }
@@ -134,11 +148,12 @@ export default async function handler(req, res) {
       case "vtex":        result = await testVtex(config);        break;
       case "tray":        result = await testTray(config);        break;
       case "olist":       result = await testOlist(config);       break;
+      case "maxdata":     result = await testMaxdata(config);      break;
       default:
         return res.status(400).json({ success: false, message: `Teste automático não disponível para "${platform}".` });
     }
     // Constrói lista de lojas usando a chave de identificação configurada
-    const storeKey = config.store_id || config.store_url || config.site_url || config.account_name || config.api_address || config.shop_host || '';
+    const storeKey = config.store_id || config.store_url || config.site_url || config.account_name || config.api_address || config.shop_host || config.api_url || '';
     const stores = result.store && storeKey ? [{ id: storeKey, name: result.store }] : [];
     return res.status(200).json({
       success: true,

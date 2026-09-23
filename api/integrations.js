@@ -31,7 +31,7 @@ export default async function handler(req, res) {
       case "PUT": {
         const caller = await requireAuth(req, res); if (!caller) return;
         const targetId = (caller.role === "admin" && req.query.user_id) ? req.query.user_id : caller.id;
-        const { suri_endpoint, suri_token, ecommerce_platform, ecommerce_config, sync_schedule } = req.body || {};
+        const { suri_endpoint, suri_token, ecommerce_platform, ecommerce_config, sync_schedule, catalog_polling } = req.body || {};
         await pool.query("INSERT IGNORE INTO user_integrations (user_id, webhook_token) VALUES ($1, $2)", [targetId, crypto.randomBytes(32).toString("hex")]);
         const fields = [], values = []; let idx = 1;
         if (suri_endpoint      !== undefined) { fields.push(`suri_endpoint = $${idx++}`);      values.push(suri_endpoint); }
@@ -42,6 +42,17 @@ export default async function handler(req, res) {
           const times = Array.isArray(sync_schedule.times) ? sync_schedule.times.filter(t => /^([01]\d|2[0-3]):[0-5]\d$/.test(t)).slice(0, 2) : [];
           fields.push(`sync_schedule = JSON_MERGE_PATCH(COALESCE(sync_schedule, '{}'), $${idx++})`);
           values.push(JSON.stringify({ enabled: !!sync_schedule.enabled && times.length > 0, times, timezone: sync_schedule.timezone || "America/Sao_Paulo" }));
+        }
+        if (catalog_polling    !== undefined) {
+          // Só os campos configuráveis pelo usuário (enabled/intervalMinutes)
+          // entram no patch — lastRunAt/lastResult/productHashes são geridos
+          // pelo próprio polling (poll-catalog.js) e nunca tocados aqui.
+          const ALLOWED_INTERVALS = [10, 15, 30, 60];
+          const intervalMinutes = ALLOWED_INTERVALS.includes(Number(catalog_polling.intervalMinutes))
+            ? Number(catalog_polling.intervalMinutes)
+            : 10;
+          fields.push(`catalog_polling = JSON_MERGE_PATCH(COALESCE(catalog_polling, '{}'), $${idx++})`);
+          values.push(JSON.stringify({ enabled: !!catalog_polling.enabled, intervalMinutes }));
         }
         if (!fields.length) return res.status(400).json({ success: false, message: "Nenhum campo informado" });
         fields.push("updated_at = NOW()"); values.push(targetId);

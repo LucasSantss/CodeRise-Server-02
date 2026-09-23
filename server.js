@@ -38,7 +38,7 @@ import handleUsers from "./api/users.js";
 import handleIntegrations from "./api/integrations.js";
 import handleNotifications from "./api/notifications.js";
 import handleSyncRules from "./api/sync-rules.js";
-import handleCronSyncStores, { runDueCatalogSyncs } from "./api/cron-sync-stores.js";
+import handleCronSyncStores, { runDueCatalogSyncs, runDuePolling } from "./api/cron-sync-stores.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -82,6 +82,10 @@ app.get("*", (req, res) => res.sendFile(path.join(distDir, "index.html")));
 const SYNC_INTERVAL_MS = 5 * 60 * 1000;
 setInterval(() => {
   runDueCatalogSyncs().catch((err) => console.error("[cron interno] erro:", err.message));
+  // Polling incremental (plataformas sem webhook, ex: MaxData) — mesmo tick,
+  // cada integração só roda de fato quando bate o intervalo configurado nela
+  // (catalog_polling.intervalMinutes, ver poll-catalog.js/runDuePolling).
+  runDuePolling().catch((err) => console.error("[cron interno][polling] erro:", err.message));
 }, SYNC_INTERVAL_MS);
 
 const port = process.env.PORT || 3000;

@@ -27,6 +27,7 @@ export async function handleSetup(req, res) {
       `ALTER TABLE user_integrations ADD COLUMN IF NOT EXISTS chatbot_active BOOLEAN NOT NULL DEFAULT false`,
       `ALTER TABLE user_integrations ADD COLUMN IF NOT EXISTS chatbot_token VARCHAR(64) UNIQUE`,
       `ALTER TABLE user_integrations ADD COLUMN IF NOT EXISTS sync_schedule JSON NULL`,
+      `ALTER TABLE user_integrations ADD COLUMN IF NOT EXISTS catalog_polling JSON NULL`,
       `ALTER TABLE user_integrations ADD COLUMN IF NOT EXISTS logistics_platform VARCHAR(50)`,
       `ALTER TABLE user_integrations ADD COLUMN IF NOT EXISTS logistics_config JSON`,
       `ALTER TABLE user_integrations ADD COLUMN IF NOT EXISTS logistics_active BOOLEAN NOT NULL DEFAULT false`,

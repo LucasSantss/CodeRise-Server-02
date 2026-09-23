@@ -11,6 +11,7 @@
 import pool from "./_lib/db.js";
 import { setCors } from "./_cors.js";
 import { syncCatalogForIntegrationRow } from "./_lib/sync-catalog.js";
+import { pollCatalogForIntegrationRow, NO_WEBHOOK_PLATFORMS } from "./_lib/poll-catalog.js";
 
 const TOLERANCE_MINUTES = 7;
 const TIME_BUDGET_MS = 45000;
@@ -102,11 +103,87 @@ export async function runDueCatalogSyncs() {
   };
 }
 
+const DEFAULT_POLLING_INTERVAL_MINUTES = 10;
+
+/**
+ * Sincronização incremental (polling) — para plataformas sem webhooks
+ * (NO_WEBHOOK_PLATFORMS, ver poll-catalog.js), roda a cada tick deste cron
+ * checando se já passou o intervalo configurado (catalog_polling.intervalMinutes,
+ * padrão 10min) desde a última execução de cada integração.
+ *
+ * Reaproveita o mesmo agendador externo do runDueCatalogSyncs — no Hostinger
+ * (server.js) o processo persistente já chama isso a cada 5min via
+ * setInterval; no Vercel, depende do mesmo cron externo (cron-job.org) que
+ * bate em /cron-sync-stores.
+ */
+export async function runDuePolling() {
+  const startedAt = Date.now();
+  const placeholders = NO_WEBHOOK_PLATFORMS.map((_, i) => `$${i + 1}`).join(",");
+  const rows = await pool.query(
+    `SELECT id, user_id, ecommerce_platform, ecommerce_config, chatbot_config, suri_endpoint, suri_token, catalog_polling
+     FROM user_integrations
+     WHERE catalog_polling->>'$.enabled' = 'true' AND ecommerce_platform IN (${placeholders})`,
+    NO_WEBHOOK_PLATFORMS
+  ).then(r => r.rows).catch(() => []);
+
+  const triggered = [];
+  let skippedBudget = 0;
+
+  for (const row of rows) {
+    if (Date.now() - startedAt > TIME_BUDGET_MS) { skippedBudget++; continue; }
+
+    const cp = row.catalog_polling || {};
+    const intervalMs = (cp.intervalMinutes || DEFAULT_POLLING_INTERVAL_MINUTES) * 60 * 1000;
+    const lastRunAt = cp.lastRunAt ? Date.parse(cp.lastRunAt) : 0;
+    if (Number.isFinite(lastRunAt) && Date.now() - lastRunAt < intervalMs) continue; // ainda não venceu o intervalo
+
+    let result;
+    try {
+      result = await pollCatalogForIntegrationRow(row);
+    } catch (err) {
+      result = { at: new Date().toISOString(), success: false, message: err.message, productHashes: cp.productHashes || {} };
+    }
+
+    // productHashes precisa ser substituído por inteiro (não mesclado) — já
+    // recalculamos o mapa completo e correto a cada rodada (pollCatalogForIntegrationRow
+    // varre o catálogo inteiro); um JSON_MERGE_PATCH comum nunca removeria as
+    // entradas de produtos que já não existem mais, e cada rodada seguinte
+    // ia detectar (e tentar desativar) o mesmo produto removido de novo, pra
+    // sempre. JSON_SET força a troca completa só desse campo; os demais
+    // (enabled/intervalMinutes, setados pelo usuário) seguem preservados
+    // pelo JSON_MERGE_PATCH.
+    const { productHashes, ...lastResult } = result;
+    await pool.query(
+      `UPDATE user_integrations
+       SET catalog_polling = JSON_SET(
+             JSON_MERGE_PATCH(COALESCE(catalog_polling, '{}'), $1),
+             '$.productHashes', CAST($2 AS JSON)
+           ),
+           updated_at = NOW()
+       WHERE id = $3`,
+      [JSON.stringify({ lastRunAt: result.at, lastResult }), JSON.stringify(productHashes || {}), row.id]
+    ).catch(() => {});
+
+    triggered.push({ user_id: row.user_id, success: result.success, message: result.message });
+  }
+
+  return {
+    success: true,
+    checked: rows.length,
+    triggered,
+    skippedBudget,
+    elapsedMs: Date.now() - startedAt,
+  };
+}
+
 export default async function handler(req, res) {
   if (setCors(req, res)) return;
   if (req.method !== "GET" && req.method !== "POST") { res.setHeader("Allow", ["GET", "POST"]); return res.status(405).end(); }
   if (!isAuthorized(req)) return res.status(401).json({ success: false, message: "Não autorizado." });
 
-  const result = await runDueCatalogSyncs();
-  return res.status(200).json(result);
+  const [syncResult, pollResult] = await Promise.all([
+    runDueCatalogSyncs(),
+    runDuePolling(),
+  ]);
+  return res.status(200).json({ ...syncResult, polling: pollResult });
 }

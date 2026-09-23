@@ -33,6 +33,7 @@ CREATE TABLE IF NOT EXISTS user_integrations (
   suri_token TEXT,
   suri_active BOOLEAN NOT NULL DEFAULT false,
   sync_schedule JSON NULL,
+  catalog_polling JSON NULL,
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   UNIQUE(user_id),

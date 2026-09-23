@@ -28,6 +28,7 @@ const ECOMMERCE_LABELS: Record<string, string> = {
   nuvemshop:   'Nuvemshop',
   olist:       'Olist',
   vtex:        'VTEX',
+  maxdata:     'MaxData',
   custom:      'Customizada',
 };
 

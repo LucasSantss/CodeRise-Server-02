@@ -34,6 +34,9 @@ export interface UserIntegration {
   logistics_token?: string | null;
   // Agendamento de sincronização automática de catálogo
   sync_schedule: SyncSchedule | null;
+  // Sincronização incremental (polling) — só relevante pra plataformas sem
+  // webhook, ver NO_WEBHOOK_PLATFORMS em api/_lib/poll-catalog.js
+  catalog_polling: CatalogPolling | null;
   created_at: string;
   updated_at: string;
 }
@@ -45,6 +48,22 @@ export interface SyncSchedule {
   lastRun?: { date: string; times: string[] };
   lastResult?: SyncScheduleHistoryEntry;
   history?: SyncScheduleHistoryEntry[];
+}
+
+export interface CatalogPolling {
+  enabled: boolean;
+  intervalMinutes: 10 | 15 | 30 | 60;
+  lastRunAt?: string | null;
+  lastResult?: CatalogPollingResult | null;
+}
+
+export interface CatalogPollingResult {
+  at: string;
+  success: boolean;
+  message: string;
+  changed?: number;
+  deactivated?: number;
+  errors?: number;
 }
 
 export interface SyncScheduleHistoryEntry {
@@ -78,7 +97,7 @@ export interface ChatbotIntegration {
   updated_at: string;
 }
 
-export type EcommercePlatform = 'shopify' | 'woocommerce' | 'tray' | 'nuvemshop' | 'vtex' | 'olist' | 'custom';
+export type EcommercePlatform = 'shopify' | 'woocommerce' | 'tray' | 'nuvemshop' | 'vtex' | 'olist' | 'maxdata' | 'custom';
 export type ChatbotPlatform = 'suri' | 'evolution_api' | 'kommo' | 'take_blip' | 'manychat' | 'weni';
 export type LogisticsPlatform = 'correios' | 'smart_envios';
 
@@ -218,6 +237,15 @@ export const ECOMMERCE_FIELDS: Record<EcommercePlatform, { label: string; fields
       { key: 'access_token', label: 'Token de Acesso', type: 'password' },
     ],
   },
+  maxdata: {
+    label: 'MaxData',
+    fields: [
+      { key: 'api_url',         label: 'API URL (ex: http://seuservidor:13093)' },
+      { key: 'emp_id',          label: 'ID da Empresa (empId)' },
+      { key: 'terminal',        label: 'Terminal' },
+      { key: 'tabela_preco_id', label: 'ID da Tabela de Preço (opcional)' },
+    ],
+  },
   custom: {
     label: 'Custom',
     fields: [
@@ -257,6 +285,11 @@ export const LOGISTICS_FIELDS: Record<LogisticsPlatform, {
     fields: [],
   },
 };
+
+// Plataformas sem nenhuma API de webhooks — só têm sincronização de
+// catálogo (manual/agendada 2x/dia) e polling incremental (10-60min).
+// Espelha NO_WEBHOOK_PLATFORMS em api/_lib/poll-catalog.js.
+export const POLLING_ONLY_PLATFORMS: EcommercePlatform[] = ['maxdata'];
 
 export const SYNC_EVENTS: { value: SyncEvent; label: string }[] = [
   { value: 'order.created',    label: 'Pedido Criado' },
