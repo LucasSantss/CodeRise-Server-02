@@ -70,9 +70,28 @@ app.all("/sync-rules*", handleSyncRules);
 app.all("/cron-sync-stores", handleCronSyncStores);
 
 // ─── Front-end (build do Vite) + fallback de SPA ────────────────────────────
+// index.html referencia os nomes de arquivo com hash do build atual (ex:
+// index-CPSjfnoX.js) — se ficar em cache, o navegador de uma aba já aberta
+// (ou revisitada sem hard-refresh) continua tentando buscar o JS/CSS do
+// build anterior, que já não existe mais em dist/assets após um novo
+// `npm run build`. Sem uma rota estática correspondente, o fallback de SPA
+// logo abaixo devolve o próprio index.html (text/html) no lugar — o
+// navegador recusa executar isso como módulo JS e a página fica em branco,
+// sem erro óbvio no Network (a requisição do .js "funciona", só que devolve
+// HTML). Por isso index.html nunca pode ficar em cache; já os arquivos
+// dentro de /assets/ têm hash no nome — o conteúdo de um nome já publicado
+// nunca muda, então podem (e devem) ficar em cache pelo tempo máximo.
 const distDir = path.join(__dirname, "dist");
-app.use(express.static(distDir));
-app.get("*", (req, res) => res.sendFile(path.join(distDir, "index.html")));
+app.use(express.static(distDir, {
+  setHeaders: (res, filePath) => {
+    if (filePath.endsWith("index.html")) res.setHeader("Cache-Control", "no-cache");
+    else res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+  },
+}));
+app.get("*", (req, res) => {
+  res.setHeader("Cache-Control", "no-cache");
+  res.sendFile(path.join(distDir, "index.html"));
+});
 
 // ─── Sincronização automática de catálogo ──────────────────────────────────
 // O processo do Node no hPanel roda o tempo todo (diferente do modelo
