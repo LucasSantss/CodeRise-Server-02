@@ -106,10 +106,13 @@ export async function runDueCatalogSyncs() {
 const DEFAULT_POLLING_INTERVAL_MINUTES = 10;
 
 /**
- * Sincronização incremental (polling) — para plataformas sem webhooks
- * (NO_WEBHOOK_PLATFORMS, ver poll-catalog.js), roda a cada tick deste cron
- * checando se já passou o intervalo configurado (catalog_polling.intervalMinutes,
- * padrão 10min) desde a última execução de cada integração.
+ * Sincronização incremental (polling) — automática pra toda integração cuja
+ * plataforma não tem webhooks (NO_WEBHOOK_PLATFORMS, ver poll-catalog.js;
+ * hoje só MaxData). Sem switch manual: basta a plataforma estar configurada
+ * com essa integração pra rodar — plataformas com webhook (Olist, Nuvemshop
+ * etc.) nunca entram aqui. Cada tick checa se já passou o intervalo
+ * configurado (catalog_polling.intervalMinutes, padrão 10min) desde a
+ * última execução de cada integração.
  *
  * Reaproveita o mesmo agendador externo do runDueCatalogSyncs — no Hostinger
  * (server.js) o processo persistente já chama isso a cada 5min via
@@ -122,7 +125,7 @@ export async function runDuePolling() {
   const rows = await pool.query(
     `SELECT id, user_id, ecommerce_platform, ecommerce_config, chatbot_config, suri_endpoint, suri_token, catalog_polling
      FROM user_integrations
-     WHERE catalog_polling->>'$.enabled' = 'true' AND ecommerce_platform IN (${placeholders})`,
+     WHERE ecommerce_platform IN (${placeholders})`,
     NO_WEBHOOK_PLATFORMS
   ).then(r => r.rows).catch(() => []);
 

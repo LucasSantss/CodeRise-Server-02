@@ -122,13 +122,19 @@ export async function pollCatalogForIntegrationRow(row) {
   if (!platform || !NO_WEBHOOK_PLATFORMS.includes(platform)) {
     return fail(`Polling incremental não disponível para "${platform || "(nenhuma plataforma)"}".`, false);
   }
+  // Polling roda automaticamente pra toda integração com plataforma sem
+  // webhook — sem um switch manual pro usuário lembrar de ligar (ver
+  // runDuePolling em cron-sync-stores.js). Por isso "ainda não configurado"
+  // não é uma falha real, só um estado transitório enquanto o usuário
+  // termina de preencher as credenciais — não notifica pra não spammar a
+  // cada 5min até a configuração ser concluída.
   if (!suriEndpoint || !suriToken) {
-    return fail("Chatbot (Suri) não configurado.");
+    return fail("Chatbot (Suri) não configurado.", false);
   }
 
   const adapters = await resolvePollingAdapters(platform, ecommerceConfig);
   if (!adapters || !adapters.storeKeyValid) {
-    return fail("E-commerce não configurado corretamente — credenciais ausentes.");
+    return fail("E-commerce não configurado corretamente — credenciais ausentes.", false);
   }
 
   try {

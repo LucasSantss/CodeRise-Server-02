@@ -120,7 +120,7 @@ const StoreMapping = () => {
   const [savingSchedule, setSavingSchedule] = useState(false);
   const [showScheduleHistory, setShowScheduleHistory] = useState(false);
 
-  const [catalogPolling, setCatalogPolling] = useState<CatalogPolling>({ enabled: false, intervalMinutes: 10 });
+  const [catalogPolling, setCatalogPolling] = useState<CatalogPolling>({ intervalMinutes: 10 });
   const [savingPolling, setSavingPolling] = useState(false);
 
   const syncPanelRef = useRef<HTMLDivElement>(null);
@@ -149,7 +149,7 @@ const StoreMapping = () => {
           }
           if (cfg._ecommerce_stores) { try { setEcommerceStores(JSON.parse(cfg._ecommerce_stores)); setEcommerceStatus('ok'); } catch { /* ignore */ } }
           if (i.sync_schedule) setSyncSchedule({ enabled: false, times: [], timezone: 'America/Sao_Paulo', ...i.sync_schedule });
-          if (i.catalog_polling) setCatalogPolling({ enabled: false, intervalMinutes: 10, ...i.catalog_polling });
+          if (i.catalog_polling) setCatalogPolling({ intervalMinutes: 10, ...i.catalog_polling });
         }
         if (c) {
           const ccfg = c.chatbot_config || {};
@@ -383,13 +383,8 @@ const StoreMapping = () => {
   const handleSavePolling = async () => {
     setSavingPolling(true);
     try {
-      await updateIntegration({ catalog_polling: { enabled: catalogPolling.enabled, intervalMinutes: catalogPolling.intervalMinutes } });
-      toast({
-        title: '✅ Configuração salva!',
-        description: catalogPolling.enabled
-          ? `Sincronização incremental ativa a cada ${catalogPolling.intervalMinutes} minutos.`
-          : 'Sincronização incremental desativada.',
-      });
+      await updateIntegration({ catalog_polling: { intervalMinutes: catalogPolling.intervalMinutes } });
+      toast({ title: '✅ Intervalo salvo!', description: `Sincronização incremental a cada ${catalogPolling.intervalMinutes} minutos.` });
     } catch (err: unknown) {
       toast({ title: 'Erro ao salvar', description: err instanceof Error ? err.message : '', variant: 'destructive' });
     } finally {
@@ -746,44 +741,37 @@ const StoreMapping = () => {
             </Button>
           </div>
 
-          {/* ── Sincronização Incremental (Polling) — só pra plataformas sem webhook ── */}
+          {/* ── Sincronização Incremental (Polling) — automática pra plataformas sem webhook ── */}
           {POLLING_ONLY_PLATFORMS.includes(ecommercePlatform as typeof POLLING_ONLY_PLATFORMS[number]) && (
             <div className="rounded-lg border p-4 space-y-4">
-              <div className="flex items-center justify-between gap-3 flex-wrap">
-                <div className="flex items-center gap-2">
-                  <Radar className="h-4 w-4 text-muted-foreground" />
-                  <div>
-                    <p className="text-sm font-medium">Sincronização Incremental</p>
-                    <p className="text-xs text-muted-foreground">
-                      Esta plataforma não envia webhooks. Verificamos periodicamente o que mudou no catálogo
-                      (só o que mudou é reenviado — sem recarregar tudo a cada vez).
-                    </p>
-                  </div>
+              <div className="flex items-center gap-2">
+                <Radar className="h-4 w-4 text-muted-foreground" />
+                <div>
+                  <p className="text-sm font-medium">Sincronização Incremental</p>
+                  <p className="text-xs text-muted-foreground">
+                    Esta plataforma não envia webhooks, então verificamos periodicamente o que mudou no
+                    catálogo automaticamente (só o que mudou é reenviado — sem recarregar tudo a cada vez).
+                    Não precisa ativar nada, só ajustar o intervalo se quiser.
+                  </p>
                 </div>
-                <Switch
-                  checked={catalogPolling.enabled}
-                  onCheckedChange={(checked) => setCatalogPolling(prev => ({ ...prev, enabled: checked }))}
-                  disabled={!hasCredentials}
-                />
               </div>
 
-              {catalogPolling.enabled && (
-                <div className="flex items-center gap-2">
-                  <Label className="text-xs text-muted-foreground shrink-0">Intervalo</Label>
-                  <Select
-                    value={String(catalogPolling.intervalMinutes)}
-                    onValueChange={(v) => setCatalogPolling(prev => ({ ...prev, intervalMinutes: Number(v) as CatalogPolling['intervalMinutes'] }))}
-                  >
-                    <SelectTrigger className="h-8 w-40 text-sm"><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="10">A cada 10 minutos</SelectItem>
-                      <SelectItem value="15">A cada 15 minutos</SelectItem>
-                      <SelectItem value="30">A cada 30 minutos</SelectItem>
-                      <SelectItem value="60">A cada 60 minutos</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-              )}
+              <div className="flex items-center gap-2">
+                <Label className="text-xs text-muted-foreground shrink-0">Intervalo</Label>
+                <Select
+                  value={String(catalogPolling.intervalMinutes)}
+                  onValueChange={(v) => setCatalogPolling(prev => ({ ...prev, intervalMinutes: Number(v) as CatalogPolling['intervalMinutes'] }))}
+                  disabled={!hasCredentials}
+                >
+                  <SelectTrigger className="h-8 w-40 text-sm"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="10">A cada 10 minutos</SelectItem>
+                    <SelectItem value="15">A cada 15 minutos</SelectItem>
+                    <SelectItem value="30">A cada 30 minutos</SelectItem>
+                    <SelectItem value="60">A cada 60 minutos</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
 
               {catalogPolling.lastResult && (
                 <div className="flex items-start gap-2 text-xs text-muted-foreground">

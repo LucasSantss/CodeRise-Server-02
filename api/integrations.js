@@ -44,15 +44,17 @@ export default async function handler(req, res) {
           values.push(JSON.stringify({ enabled: !!sync_schedule.enabled && times.length > 0, times, timezone: sync_schedule.timezone || "America/Sao_Paulo" }));
         }
         if (catalog_polling    !== undefined) {
-          // Só os campos configuráveis pelo usuário (enabled/intervalMinutes)
-          // entram no patch — lastRunAt/lastResult/productHashes são geridos
-          // pelo próprio polling (poll-catalog.js) e nunca tocados aqui.
+          // Polling roda automaticamente pra plataformas sem webhook (ver
+          // NO_WEBHOOK_PLATFORMS/runDuePolling) — não existe switch de
+          // liga/desliga, só o intervalo é configurável pelo usuário aqui.
+          // lastRunAt/lastResult/productHashes são geridos pelo próprio
+          // polling (poll-catalog.js) e nunca tocados neste endpoint.
           const ALLOWED_INTERVALS = [10, 15, 30, 60];
           const intervalMinutes = ALLOWED_INTERVALS.includes(Number(catalog_polling.intervalMinutes))
             ? Number(catalog_polling.intervalMinutes)
             : 10;
           fields.push(`catalog_polling = JSON_MERGE_PATCH(COALESCE(catalog_polling, '{}'), $${idx++})`);
-          values.push(JSON.stringify({ enabled: !!catalog_polling.enabled, intervalMinutes }));
+          values.push(JSON.stringify({ intervalMinutes }));
         }
         if (!fields.length) return res.status(400).json({ success: false, message: "Nenhum campo informado" });
         fields.push("updated_at = NOW()"); values.push(targetId);

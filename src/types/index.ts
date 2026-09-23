@@ -51,7 +51,8 @@ export interface SyncSchedule {
 }
 
 export interface CatalogPolling {
-  enabled: boolean;
+  // Sem campo "enabled": roda automaticamente pra toda plataforma em
+  // POLLING_ONLY_PLATFORMS — só o intervalo é configurável pelo usuário.
   intervalMinutes: 10 | 15 | 30 | 60;
   lastRunAt?: string | null;
   lastResult?: CatalogPollingResult | null;
